@@ -32,12 +32,14 @@ func Configure(cfg BrokerConfig) error {
 // valid, all fields used within its Execute method must be exported.
 type Job interface {
 	Name() string
-	Execute() error
+	Execute(TimeoutChan) error
 }
 
 type JobOptions struct {
 	Queue string
 }
+
+type TimeoutChan <-chan struct{}
 
 // Run schedules a job using the default broker. Before calling goku.Run, the
 // default client must be configured using goku.Configure.

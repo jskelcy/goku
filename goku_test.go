@@ -21,8 +21,39 @@ func (tj TestJob) Name() string {
 
 var tjWasCalled bool
 
-func (tj TestJob) Execute() error {
+func (tj TestJob) Execute(_ TimeoutChan) error {
 	tjWasCalled = true
+	return nil
+}
+
+type TestJobWithTimeout struct {
+	Foo int
+	Bar string
+}
+
+func (tj TestJobWithTimeout) Name() string {
+	return "test_job_with_timeout"
+}
+
+var tjwtWasCalled bool
+var slowJobDone bool
+
+func (tj TestJobWithTimeout) Execute(timeoutChan TimeoutChan) error {
+	tjwtWasCalled = true
+	slowOperationChan := make(chan struct{})
+
+	go func() {
+		time.Sleep(time.Second * 5)
+		close(slowOperationChan)
+	}()
+
+	select {
+	case <-slowOperationChan:
+		slowJobDone = true
+	case <-timeoutChan:
+		slowJobDone = false
+	}
+
 	return nil
 }
 
@@ -112,6 +143,59 @@ func TestRun(t *testing.T) {
 	wp.Stop()
 
 	assert.True(tjWasCalled)
+}
+
+func TestRunWithJobTimeout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	queue := "goku_test"
+	hostport := "127.0.0.1:6379"
+
+	config := WorkerConfig{
+		NumWorkers: 1,
+		Queues:     []string{queue},
+		Hostport:   hostport,
+		Timeout:    time.Second,
+		jobTimeout: time.Second,
+	}
+
+	opts := WorkerPoolOptions{
+		Failure: nil,
+		Jobs: []Job{
+			TestJobWithTimeout{},
+		},
+	}
+
+	// start the worker
+	wp, err := NewWorkerPool(config, opts)
+	assert.NoError(err)
+	wp.Start()
+
+	tjwtWasCalled = false
+	tjWasCalled = false
+
+	// schedule the job from the broker
+	broker, err := NewBroker(BrokerConfig{
+		Hostport:     hostport,
+		Timeout:      time.Second,
+		DefaultQueue: queue,
+	})
+
+	require.NoError(err)
+
+	job := TestJobWithTimeout{
+		Foo: 4,
+		Bar: "sup",
+	}
+
+	err = broker.Run(job)
+	assert.NoError(err)
+	time.Sleep(time.Second) // give workers some time to pull the job out of the queue
+	wp.Stop()
+
+	assert.True(tjwtWasCalled)
+	assert.False(slowJobDone)
 }
 
 func TestBrokerBadConfig(t *testing.T) {

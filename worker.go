@@ -30,6 +30,7 @@ type WorkerConfig struct {
 	Hostport   string        // redis hostport
 	Password   string        // redis auth password (optional)
 	Timeout    time.Duration // redis timeout
+	jobTimeout time.Duration // timeout got a job (optional)
 
 	// If a worker doesn't know how to handle a job it will be requeued.
 	// sometimes requeuing can fail. This field is max number of retries before
@@ -53,6 +54,7 @@ type WorkerPool struct {
 	wg             sync.WaitGroup
 	m              sync.RWMutex
 	running        bool
+	jobTimeout     time.Duration
 }
 
 // WorkerPoolOptions exists for defining things that wouldn't be possible
@@ -81,6 +83,7 @@ func NewWorkerPool(cfg WorkerConfig, opts WorkerPoolOptions) (*WorkerPool, error
 		fail:           opts.Failure,
 		timeout:        cfg.Timeout,
 		requeueRetries: cfg.RequeRetries,
+		jobTimeout:     cfg.jobTimeout,
 	}
 
 	for _, job := range opts.Jobs {
@@ -193,7 +196,16 @@ func (wp *WorkerPool) doWork(job Job, n int) {
 
 	wp.wg.Add(1)
 	defer wp.wg.Done()
-	if err := job.Execute(); err != nil {
+
+	timeoutChan := make(chan struct{})
+	go func() {
+		if wp.jobTimeout > 0 {
+			time.Sleep(wp.jobTimeout)
+			close(timeoutChan)
+		}
+	}()
+
+	if err := job.Execute(timeoutChan); err != nil {
 		wp.fail(n, job, err)
 	}
 }
